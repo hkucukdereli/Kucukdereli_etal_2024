@@ -20,19 +20,28 @@ from torchvision import datasets, models, transforms
 import re
 import time
 
+try:
+    import wandb
+    wandb_track = True
+except: 
+    wandb_track = False
+    print('wandb not installed')
 
 
-print(f"hostname: {socket.gethostname()}",fluse=True)
+
+print(f"hostname: {socket.gethostname()}",flush=True)
 
 # where to save the models
-output_paths = '?'
+output_paths = 'tmp'
 wandb_username = "?"
 image_size = (512, 640)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_set', type=str,choices=['test', 'test_', 'preference'])
+    parser.add_argument('--train_dataset', type=str)
+    parser.add_argument('--validation_dataset', type=str)
+    
     parser.add_argument('--lr', type=float, default=0.001, help='Initial learning rate for adam.')
     parser.add_argument('--workers', default=7, type=int, help='Number of data loading workers.')
     parser.add_argument('--epochs', type=int, default=20, help='Total training epochs.')
@@ -40,6 +49,7 @@ def parse_args():
     parser.add_argument('--lr_scheduler', type=str, default='exp', help='exp/plateau')
     parser.add_argument('--model_name', type=str, default='resnet', help='[resnet, alexnet, vgg, squeezenet, densenet, inception, beitBasePatch16]')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate.')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
     return parser.parse_args()
 
 
@@ -48,13 +58,13 @@ def parse_args():
 class ImageLoader(data.Dataset):
     """Face Landmarks dataset."""
 
-    def __init__(self, manifest, transform, crop, data_structure, bkg_mask, res_transform, idim: list):
+    def __init__(self, manifest, transform):
 
         self.manifest = manifest
         self.transform = transform
 
         #Load manifest data, maybe with pandas
-        self.dataset = pd.read_text(manifest,name=['path','label'])
+        self.dataset = pd.read_csv(manifest,names=['path','label'])
 
     def __len__(self):
         return len(self.dataset)
@@ -137,7 +147,7 @@ def initialize_model(model_name, input_dims, num_classes, feature_extract, dropo
         Be careful, expects (299,299) sized images and has auxiliary output
         """
         model_ft = models.inception_v3(pretrained=use_pretrained)
-        set_parameter_requires_grad(model_ft, feature_extract)
+        # set_parameter_requires_grad(model_ft, feature_extract)
         # Handle the auxilary net
         num_ftrs = model_ft.AuxLogits.fc.in_features
         model_ft.AuxLogits.fc = nn.Linear(num_ftrs, num_classes)
@@ -153,11 +163,11 @@ def initialize_model(model_name, input_dims, num_classes, feature_extract, dropo
     return model_ft, input_size, image_mean, image_std
 
 
-args = None
+# args = None
 
 def run_training():
-    global args
-
+    # global args
+    args = parse_args()
     print(args)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -187,7 +197,7 @@ def run_training():
                                         ])
                         
     
-    train_dataset = ImageLoader(manifest_train, transform = data_transforms)
+    train_dataset = ImageLoader(args.train_dataset, transform = data_transforms)
 
     print('Whole train set size:', train_dataset.__len__())
     train_loader = torch.utils.data.DataLoader(train_dataset,
@@ -205,10 +215,8 @@ def run_training():
                                                 transforms.Normalize(mean=image_mean,
                                                   std=image_std)])      
                     
-    val_dataset = ImageLoader(manifest_validation, 
-                                transform = data_transforms_val, 
-                                crop=args.crop, 
-                                data_structure=args.data_structure)
+    val_dataset = ImageLoader(args.validation_dataset, 
+                                transform = data_transforms_val)
 
     
     print(f'Validation set size:{val_dataset.__len__()}')
@@ -237,14 +245,14 @@ def run_training():
 
 
     # Set loggings
-    wb_name = f'{args.data_set} {args.model_name} do{args.dropout}'
-    wandb.init(project=f"finetunning_{run_date}", entity="oren",name=wb_name)
+    wb_name = f'{args.model_name} do{args.dropout}'
+    if wandb_track: wandb.init(project=f"finetunning", entity="oren",name=wb_name)
 
-    wandb.config.update(args)
+    if wandb_track: wandb.config.update(args)
     print(train_dataset.dataset['label'].value_counts())
     print(train_dataset.dataset['label'].value_counts())
-    wandb.config.train_data =  len(full_df_train)
-    wandb.config.test_data =  len(full_df_test)
+    if wandb_track: wandb.config.train_data =  len(train_dataset)
+    if wandb_track: wandb.config.test_data =  len(train_dataset)
 
 
     best_acc = 0
@@ -282,7 +290,7 @@ def run_training():
                     "train/epoch": epoch+1, 
                     'lr': optimizer.param_groups[0]['lr']}
 
-        wandb.log(metrics)
+        if wandb_track: wandb.log(metrics)
 
         with torch.no_grad():
             running_loss = 0.0
@@ -318,16 +326,11 @@ def run_training():
             tqdm.write("[Epoch %d] Validation accuracy:%.4f. Loss:%.3f" % (epoch, val_metrics["val/acc"], val_metrics['val/loss']))
             tqdm.write("best_acc:" + str(best_acc))
 
-            wandb.log({**metrics, **val_metrics})
+            if wandb_track: wandb.log({**metrics, **val_metrics})
             
             if val_metrics["val/acc"] >= best_acc:
                 text_add = '_run_debug' if args.run_debug else '' 
                 text_add+= '_run_shuffle' if args.shuffle else '' 
-                
-                if len(mice)==1:
-                    mouse_path = mice[0]
-                else:
-                    mouse_path = f'{len(mice)}_mice'
                 
                 #datast_text = f'{args.data_structure}' if args.data_structure!='image' else ''
                 save_path = Path(f'{output_paths}','checkpoints',args.data_set, f'do{args.dropout}')
@@ -339,8 +342,7 @@ def run_training():
                             save_path/ f"model{args.model_name}_{epoch}_acc{acc:.5}{text_add}.pth")
                 tqdm.write('Model saved.')
                 #saving training/testing dataframe
-                pickle.dump({'full_df_test':full_df_test,'full_df_train':full_df_train},open(save_path/f"test_train_df{text_add}.pkl",'wb'))
-
+                
      
         
 if __name__ == "__main__":                    
