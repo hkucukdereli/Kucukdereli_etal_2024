@@ -1,10 +1,10 @@
-#!/home/andermannlab/anaconda3/bin/python
-import os, time
+#!/mnt/colab/colab_shared/anaconda3/bin/python
+import os
 import glob
 from tqdm import tqdm
 import argparse
 import sys
-# sys.path.append('/home/oamsalem/code/Projects/Hakan')
+sys.path.append('/home/oamsalem/code/Projects/Hakan')
 from pathlib import Path
 
 from PIL import Image, ImageChops
@@ -19,11 +19,13 @@ from torchvision import transforms, datasets
 from DAN.video_data_parse import get_data_samples 
 import h5py
 import socket
-# print(f"hostname: {socket.gethostname()}")
+print(f"hostname: {socket.gethostname()}")
 sys.stdout.flush()
-# import wandb
+import wandb
 from torchvision import datasets, models, transforms
 import re
+import time
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -32,7 +34,7 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size.')
     parser.add_argument('--lr', type=float, default=0.001, help='Initial learning rate for adam.')
     parser.add_argument('--workers', default=7, type=int, help='Number of data loading workers.')
-    parser.add_argument('--epochs', type=int, default=30, help='Total training epochs.')
+    parser.add_argument('--epochs', type=int, default=20, help='Total training epochs.')
     parser.add_argument('--num_class', type=int, default=2, help='Number of class.')
     parser.add_argument('--lr_scheduler', type=str, default='exp', help='exp/plateau')
     parser.add_argument('--run_debug', action='store_true', help='Run debug mode. in-which I just try to detect running')
@@ -47,7 +49,8 @@ def parse_args():
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate.')
     return parser.parse_args()
 
-run_date = '260622_dropouttest'
+
+run_date = '010722'
 # if socket.gethostname() == 'colab02':
 #     base_path = '/home/oamsalem/test_data_on_ssd/'
 # else:
@@ -75,6 +78,7 @@ class ImageLoader(data.Dataset):
 
         self.max_per_day = {(row['mouse'],row['date']):row['index'] for _,row in full_df.reset_index().groupby(['mouse','date']).max().reset_index().iterrows()} # get the max index per mouse and date
 
+
         if self.idim in self.data_structure:
             self.conc_step = 1 if self.data_structure.split(self.idim)[1] == '' else int(self.data_structure.split(self.idim)[-1])
 
@@ -84,10 +88,12 @@ class ImageLoader(data.Dataset):
             raise NotImplementedError('crop is in full image coordinates, but with mask the image is in 244 coordinates')
         
         if self.bkg_mask == 'DLCmask':
-            print()
             mouse_date =  full_df.drop_duplicates(subset=['mouse','date'])[['mouse','date']].values
             self.mouse_hdf_fls = {tuple(i):h5py.File(f'/mnt/anastasia/data/behavior/hakan/{i[0]}/{i[1]}_{i[0]}/{i[0]}_{i[1]}_1_background_mask.h5', 'r') for i in mouse_date}
+
+
         
+
     def __len__(self):
         return len(self.full_df)
 
@@ -106,26 +112,29 @@ class ImageLoader(data.Dataset):
         return image
     
     def load_hakan_crop(self, mouse, date, frame_n):
-        for i in range(40):
-            time.sleep(0.05*i)
-                
+        for i in range(4):
             try:
-                image = Image.open(f'{base_path_cache}/{mouse}/{date}_{mouse}/DLCmask/{mouse}_{date}_{frame_n}.jpg')
-            except:
                 try:
-                    image = np.array(self.load_image(mouse, date, frame_n))
-                    mask = self.mouse_hdf_fls[(mouse, date)]['data'][frame_n]
-                    image[~mask] = 128
-                    image = Image.fromarray(image)
-                    image = self.res_transform(image)
-                    os.makedirs(f'{base_path_cache}/{mouse}/{date}_{mouse}/DLCmask', exist_ok=True)
-                    image.save(f'{base_path_cache}/{mouse}/{date}_{mouse}/DLCmask/{mouse}_{date}_{frame_n}.jpg')
+                    image = Image.open(f'{base_path_cache}/{mouse}/{date}_{mouse}/DLCmask/{mouse}_{date}_{frame_n}.jpg')
                 except:
-                    print(f'{mouse} {date} {frame_n}')
-                    #mask = self.mouse_hdf_fls[(mouse, date)]['data'][frame_n]
-                    print(f'Cannot load DLCmask {mouse} {date} {frame_n}')
-            return image
-        raise Exception(f'Cannot load DLCmask {mouse} {date} {frame_n}')
+                    try:
+                        image = np.array(self.load_image(mouse, date, frame_n))
+                        mask = self.mouse_hdf_fls[(mouse, date)]['data'][frame_n]
+                        image[~mask] = 128
+                        image = Image.fromarray(image)
+                        image = self.res_transform(image)
+                        os.makedirs(f'{base_path_cache}/{mouse}/{date}_{mouse}/DLCmask', exist_ok=True)
+                        image.save(f'{base_path_cache}/{mouse}/{date}_{mouse}/DLCmask/{mouse}_{date}_{frame_n}.jpg')
+                    except:
+                        print(f'{mouse} {date} {frame_n}')
+                        #mask = self.mouse_hdf_fls[(mouse, date)]['data'][frame_n]
+                        raise Exception(f'Cannot load DLCmask {mouse} {date} {frame_n}')
+                return image
+            except:
+                print(f"Did not manage to load {mouse} {date} {frame_n}, attempt {i}/4")
+                time.sleep(0.2)
+        raise Exception("FINAL - load_hakan_crop - did not managed to load {mouse} {date} {frame_n} 4 attempts")
+
 
     def __getitem__(self, idx):
         sample = self.full_df.iloc[idx]
@@ -152,7 +161,7 @@ class ImageLoader(data.Dataset):
         if self.data_structure=='diff':
              image_0 = load_image(mouse, date, max(frame_n-1,1))
              image = ImageChops.subtract(image,image_0)
-        if 'diff3D' in self.data_structure:
+        elif 'diff3D' in self.data_structure:
             image_0 = load_image(mouse, date, max(frame_n-2*self.conc_step,0))
             image_1 = load_image(mouse, date, max(frame_n-1*self.conc_step,0))
             image_2 = load_image(mouse, date, min(frame_n+1*self.conc_step,self.max_per_day[(mouse,date)]))
@@ -200,13 +209,13 @@ class ImageLoader(data.Dataset):
                 image = image.crop((image_size[1]-self.crop[2],self.crop[1],image_size[1]-self.crop[0],self.crop[3]))
             else:
                 image = image.crop((self.crop[0],self.crop[1],self.crop[2],self.crop[3]))
+        
 
         if self.transform is not None:
             image = self.transform(image)
             
         label = sample.stim
-
-        return image, label, mouse, date, frame_n
+        return image, label
 
 def set_parameter_requires_grad(model, feature_extracting):
     pass
@@ -222,7 +231,6 @@ def initialize_model(model_name, input_dims, num_classes, feature_extract, dropo
     input_size = 0
     image_mean = [0.485, 0.456, 0.406]
     image_std = [0.229, 0.224, 0.225]
-
     if dropout>0 and model_name!='resnet':
         raise Exception('Dropout is only implemented for resnet!')
     
@@ -238,8 +246,7 @@ def initialize_model(model_name, input_dims, num_classes, feature_extract, dropo
     elif model_name == "resnet":
         """ Resnet18
         """
-        # model_ft = models.resnet18(pretrained=use_pretrained,dropout=dropout)
-        model_ft = models.resnet18(pretrained=use_pretrained)
+        model_ft = models.resnet18(pretrained=use_pretrained,dropout=dropout)
         set_parameter_requires_grad(model_ft, feature_extract)
         num_ftrs = model_ft.fc.in_features
         model_ft.fc = nn.Linear(num_ftrs, num_classes)
@@ -333,29 +340,23 @@ def expand_mean_std_dims(X: list, idim: str) -> list :
         [X.insert(-1,en) for i in range(int((D-3)/2))]
     return X
 
-
-# pd_sample_seed = 12
-# chunk_min_size = 20 # For the case of chunks, what is the minimum size of a chunk?
-# min_diff = 30 if args.run_debug else 100 # what is the length of each bout
-
-# full_df_parsed = parse_data_frame_ids(full_df, rnd_state=30, min_diff=min_diff, chunk_min_size=chunk_min_size)
-
-# full_df_train = full_df_parsed.query(f'train==1').copy()
-# (full_df_train.query("stim==0").shape, full_df_train.query("stim==1").shape)
-# full_df_train = subsample_per_mousedate(full_df_train, pd_sample_seed)
-
-# full_df_test = full_df_parsed.query(f'train==0').copy()
-# (full_df_test.query("stim==0").shape, full_df_test.query("stim==1").shape)
-# full_df_test = subsample_per_mousedate(full_df_test, pd_sample_seed)
-
-'''
+import socket
 def run_training():
     global args
+
     pd_sample_seed = 12
     chunk_min_size = 20 # For the case of chunks, what is the minimum size of a chunk?
     subample_per_mousedate = 1
     if args is None:
         args = parse_args()
+        if args.data_structure in ['image9D','image11D','image13D','image15D']:
+            if args.batch_size == 256:
+                if socket.gethostname() == 'colab01':
+                    args.batch_size = 130
+                if socket.gethostname() == 'colab00':
+                    args.batch_size = 200
+            #args.workers = 16
+        print(args.workers)
     print(args)
     # regexp to see if we have a number of image
     m = re.search('(?:image|diff)(\d*)D', args.data_structure)
@@ -547,6 +548,7 @@ def run_training():
             sample_cnt = 0
             model.eval()
             for imgs, targets in  tqdm(val_loader,desc='Testing'):
+        
                 imgs = imgs.to(device)
                 targets = targets.to(device)
                 out = model(imgs)
@@ -595,11 +597,11 @@ def run_training():
                 tqdm.write('Model saved.')
                 #saving training/testing dataframe
                 pickle.dump({'full_df_test':full_df_test,'full_df_train':full_df_train},open(save_path/f"test_train_df{text_add}.pkl",'wb'))
-'''
+
      
         
-# if __name__ == "__main__":                    
-#     run_training()
+if __name__ == "__main__":                    
+    run_training()
 
 
 
