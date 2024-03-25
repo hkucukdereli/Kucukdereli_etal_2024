@@ -1,24 +1,17 @@
 #!/mnt/colab/colab_shared/anaconda3/bin/python
-import os
-import glob
-from tqdm import tqdm
-import argparse
-import sys
-from pathlib import Path
-from PIL import Image, ImageChops
-import numpy as np
-import pandas as pd
-import pickle
-import socket
-import torch
 import torch.nn as nn
 import torch.utils.data as data
-from torchvision import transforms, datasets
-import h5py
+
+import argparse
 import socket
-from torchvision import datasets, models, transforms
-import re
-import time
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import torch
+from PIL import Image
+from torchvision import models, transforms
+from torchvision import transforms
+from tqdm import tqdm
 
 try:
     import wandb
@@ -64,8 +57,8 @@ class ImageLoader(data.Dataset):
         self.transform = transform
 
         #Load manifest data, maybe with pandas
-        self.dataset = pd.read_csv(manifest,names=['path','label'])
-
+        self.dataset = pd.read_csv(manifest)#$,names=['path','label'])
+        
     def __len__(self):
         return len(self.dataset)
 
@@ -76,7 +69,7 @@ class ImageLoader(data.Dataset):
 
         if self.transform is not None:
             image = self.transform(image)
-            
+        image = image.float()
         
         return image, label
 
@@ -177,7 +170,7 @@ def run_training():
                                                                 None, 
                                                                 args.dropout, 
                                                                 use_pretrained=True)
-    model = model.to(device)
+    model = model.to(device).float()
 
     ##
     ## Need to verify that indeed the image is 0-1.. if it is 0-255 the normalziation will not have effect!!!
@@ -189,8 +182,10 @@ def run_training():
     data_transforms = transforms.Compose([
                                         transforms.Resize((input_size, input_size)),
                                         transforms.RandomHorizontalFlip(),
-                                        transforms.RandomApply([transforms.RandomAffine(20, scale=(0.8, 1), translate=(0.2, 0.2)),],
-                                                                p=0.7),
+                                        transforms.RandomApply([
+                                                transforms.RandomAffine(20, scale=(0.8, 1), translate=(0.2, 0.2)),
+                                            ], p=0.7),
+                                        transforms.ToTensor(),
                                         transforms.Lambda(lambda x: x.repeat(3, 1, 1)),
                                         transforms.Normalize(mean=image_mean,
                                                                 std=image_std)
@@ -211,9 +206,10 @@ def run_training():
     ########################
 
     data_transforms_val = transforms.Compose([transforms.Resize((input_size, input_size)),
-                                                transforms.Lambda(lambda x: x.repeat(3, 1, 1)),
-                                                transforms.Normalize(mean=image_mean,
-                                                  std=image_std)])      
+                                            transforms.ToTensor(),
+                                            transforms.Lambda(lambda x: x.repeat(3, 1, 1)),
+                                            transforms.Normalize(mean=image_mean,
+                                                                std=image_std)])      
                     
     val_dataset = ImageLoader(args.validation_dataset, 
                                 transform = data_transforms_val)
@@ -265,13 +261,12 @@ def run_training():
         for (imgs, targets) in tqdm(train_loader,desc='Training'):
             iter_cnt += 1
             optimizer.zero_grad()
-
+            
             imgs = imgs.to(device)
             targets = targets.to(device)
             
             out = model(imgs)
             out = out.logits if args.model_name == 'beitBasePatch16' else out
-
             loss = criterion_cls(out,targets) 
 
             loss.backward()
@@ -329,17 +324,15 @@ def run_training():
             if wandb_track: wandb.log({**metrics, **val_metrics})
             
             if val_metrics["val/acc"] >= best_acc:
-                text_add = '_run_debug' if args.run_debug else '' 
-                text_add+= '_run_shuffle' if args.shuffle else '' 
                 
                 #datast_text = f'{args.data_structure}' if args.data_structure!='image' else ''
-                save_path = Path(f'{output_paths}','checkpoints',args.data_set, f'do{args.dropout}')
+                save_path = Path(f'{output_paths}','checkpoints','do{args.dropout}')
                 save_path.mkdir(parents=True, exist_ok=True)
                 torch.save({'iter': epoch,
                             'model_state_dict': model.state_dict(),
                              'optimizer_state_dict': optimizer.state_dict(),
                              'args': args},
-                            save_path/ f"model{args.model_name}_{epoch}_acc{acc:.5}{text_add}.pth")
+                            save_path/ f"model{args.model_name}_{epoch}_acc{acc:.5}.pth")
                 tqdm.write('Model saved.')
                 #saving training/testing dataframe
                 
@@ -348,8 +341,3 @@ def run_training():
 if __name__ == "__main__":                    
     run_training()
 
-
-
-
-
-#uFja1fvqk1
